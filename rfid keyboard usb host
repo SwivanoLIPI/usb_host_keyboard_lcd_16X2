@@ -1,0 +1,330 @@
+#include <hidboot.h>
+#include <usbhub.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <Wire.h>
+
+
+#define SS_PIN 53
+#define RST_PIN 5
+MFRC522 mfrc522(SS_PIN, RST_PIN);  // Create MFRC522 instance
+// Define the LCD address and size
+#define LCD_ADDRESS 0x27
+#define LCD_COLUMNS 16
+#define LCD_ROWS 2
+
+// Initialize the LCD
+LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
+
+char displayBuffer[LCD_COLUMNS * LCD_ROWS + 1]; // Buffer to hold characters for both rows
+int currentCol = 0; // Position to insert the next character
+int currentRow = 0; // Active row on the LCD
+
+class KbdRptParser : public KeyboardReportParser
+{
+    void PrintKey(uint8_t mod, uint8_t key);
+
+  protected:
+    void OnControlKeysChanged(uint8_t before, uint8_t after);
+    void OnKeyDown(uint8_t mod, uint8_t key);
+    void OnKeyUp(uint8_t mod, uint8_t key);
+    void OnKeyPressed(uint8_t key);
+};
+
+// Map keycodes to characters
+char KeycodeToChar(uint8_t keycode)
+{
+    switch (keycode)
+    {
+        case 4: return 'a'; // Keycode for 'a'
+        case 5: return 'b'; // Keycode for 'b'
+        case 6: return 'c'; // Keycode for 'c'
+        case 7: return 'd'; // Keycode for 'd'
+        case 8: return 'e'; // Keycode for 'e'
+        case 9: return 'f'; // Keycode for 'f'
+        case 10: return 'g'; // Keycode for 'g'
+        case 11: return 'h'; // Keycode for 'h'
+        case 12: return 'i'; // Keycode for 'i'
+        case 13: return 'j'; // Keycode for 'j'
+        case 0xE: return 'k'; // Keycode for 'k'
+        case 0xF: return 'l'; // Keycode for 'l'
+        case 0x10: return 'm'; // Keycode for 'm'
+        case 0x11: return 'n'; // Keycode for 'n'
+        case 0x12: return 'o'; // Keycode for 'o'
+        case 0x13: return 'p'; // Keycode for 'p'
+        case 0x14: return 'q'; // Hex 1A
+        case 0x15: return 'r'; // Hex 1B
+        case 0x16: return 's'; // Hex 1C
+        case 0x17: return 't'; // Hex 1D
+        case 0x18: return 'u'; // Hex 1E
+        case 0x19: return 'v'; // Hex 1F
+        case 0x1A: return 'w'; // Hex 20
+        case 0x1B: return 'x'; // Hex 21
+        case 0x1C: return 'y'; // Hex 22
+        case 0x1D: return 'z'; // Hex 23
+        case 0x1E: return '1';
+        case 0x1F: return '2';
+        case 0x20: return '3';
+        case 0x21: return '4';
+        case 0x22: return '5';
+        case 0x23: return '6';
+        case 0x24: return '7';
+        case 0x25: return '8';
+        case 0x26: return '9';
+        case 0x27: return '0';
+        case 0x37: return '.';
+        case 0x36: return ',';
+        case 0x33: return ':';
+        case 0x2D: return '-';
+        case 0x2E: return '+';
+        case 0x4C: return '\0'; // Special case for 'Delete', no action required
+        case 0x28: return '\0'; // Special case for 'Enter', handled separately
+        case 0x52: return '\0'; // Special case for 'UP', handled separately
+        case 0x51: return '\0'; // Special case for 'DOWN', handled separately
+        default: return '\0'; // Return null character for unsupported keycodes
+    }
+}
+
+void KbdRptParser::PrintKey(uint8_t m, uint8_t key)
+{
+    MODIFIERKEYS mod;
+    *((uint8_t*)&mod) = m;
+    Serial.print((mod.bmLeftCtrl   == 1) ? "C" : " ");
+    Serial.print((mod.bmLeftShift  == 1) ? "S" : " ");
+    Serial.print((mod.bmLeftAlt    == 1) ? "A" : " ");
+    Serial.print((mod.bmLeftGUI    == 1) ? "G" : " ");
+
+    Serial.print(" >");
+    PrintHex<uint8_t>(key, 0x80);
+    Serial.print("< ");
+
+    Serial.print((mod.bmRightCtrl   == 1) ? "C" : " ");
+    Serial.print((mod.bmRightShift  == 1) ? "S" : " ");
+    Serial.print((mod.bmRightAlt    == 1) ? "A" : " ");
+    Serial.println((mod.bmRightGUI    == 1) ? "G" : " ");
+};
+
+void KbdRptParser::OnKeyDown(uint8_t mod, uint8_t key)
+{
+    Serial.print("DN ");
+    PrintKey(mod, key);
+    OnKeyPressed(key);
+}
+
+void KbdRptParser::OnControlKeysChanged(uint8_t before, uint8_t after)
+{
+    // Handle control key changes if necessary
+}
+
+void KbdRptParser::OnKeyUp(uint8_t mod, uint8_t key)
+{
+    Serial.print("UP ");
+    PrintKey(mod, key);
+}
+
+void KbdRptParser::OnKeyPressed(uint8_t key)
+{
+    Serial.print("Key Code: ");
+    Serial.println(key, HEX); // Debug: Print key code
+
+    if (key == 0x2A) // Backspace key
+    {
+        if (currentCol > 0) // Ensure there's something to delete
+        {
+            // Move cursor to the position of the last character
+            currentCol--;
+            displayBuffer[currentRow * LCD_COLUMNS + currentCol] = ' ';
+            // Update the display with the new content
+            lcd.setCursor(0, currentRow);
+            lcd.print(displayBuffer + currentRow * LCD_COLUMNS);
+            lcd.setCursor(currentCol, currentRow); // Reset cursor position
+        }
+    }
+    else if (key == 0x4C) // Delete key
+    {
+        // Clear the LCD and reset buffer
+        lcd.clear();
+        memset(displayBuffer, ' ', LCD_COLUMNS * LCD_ROWS);
+        displayBuffer[LCD_COLUMNS * LCD_ROWS] = '\0'; // Null-terminate the string
+        currentCol = 0;
+        currentRow = 0;
+    }
+    else if (key == 0x28) // Check for Enter key
+    {
+        // Move to the next row if not at the last row
+        if (currentRow < LCD_ROWS - 1)
+        {
+            currentRow++;
+            currentCol = 0; // Reset column position
+            lcd.setCursor(currentCol, currentRow);
+        }
+    }
+    else if (key == 0x52) // UP key
+    {
+        // Move to the first row
+        currentRow = 0;
+        currentCol = min(currentCol, LCD_COLUMNS - 1); // Ensure column is within bounds
+        lcd.setCursor(currentCol, currentRow);
+    }
+    else if (key == 0x51) // DOWN key
+    {
+        // Move to the second row
+        currentRow = 1;
+        currentCol = min(currentCol, LCD_COLUMNS - 1); // Ensure column is within bounds
+        lcd.setCursor(currentCol, currentRow);
+    }
+    else
+    {
+        char character = KeycodeToChar(key);
+
+        if (character != '\0') // Check if it's a valid character
+        {
+            if (currentCol >= LCD_COLUMNS) {
+                // Scroll the text to the left
+                lcd.scrollDisplayLeft();
+                // Shift the buffer to the left
+                memmove(displayBuffer + currentRow * LCD_COLUMNS, displayBuffer + (currentRow * LCD_COLUMNS) + 1, LCD_COLUMNS - 1);
+                displayBuffer[(currentRow + 1) * LCD_COLUMNS - 1] = ' '; // Clear the last character in the buffer
+                currentCol = LCD_COLUMNS - 1; // Adjust the current position
+            }
+
+            // Add the new character to the buffer
+            displayBuffer[currentRow * LCD_COLUMNS + currentCol] = character;
+            displayBuffer[(currentRow + 1) * LCD_COLUMNS - 1] = '\0'; // Null-terminate the string
+
+            // Set cursor position
+            lcd.setCursor(currentCol, currentRow);
+            // Print the new character
+            lcd.print(character);
+
+            // Update the current column position
+            currentCol++;
+        }
+        else
+        {
+            Serial.print("Unsupported keycode: ");
+            Serial.println(key, HEX);
+        }
+    }
+}
+
+USB Usb;
+HIDBoot<USB_HID_PROTOCOL_KEYBOARD> HidKeyboard(&Usb);
+
+KbdRptParser Prs;
+
+void setup()
+{
+    Serial.begin(115200);
+    
+#if !defined(__MIPSEL__)
+    while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
+#endif
+    Serial.println("Start");
+
+    lcd.init(); // Initialize the LCD
+    lcd.backlight(); // Turn on the backlight
+    SPI.begin();          // Init SPI bus
+    mfrc522.PCD_Init();   // Init MFRC522
+            // Initialize the LCD
+    lcd.backlight();      // Turn on the LCD backlight
+    lcd.setCursor(0, 0);
+    lcd.print("RFID Controller");
+    lcd.setCursor(0, 1);
+    lcd.print("Version A.1.1.0");
+    // Initialize the display buffer with spaces
+    memset(displayBuffer, ' ', LCD_COLUMNS * LCD_ROWS);
+    displayBuffer[LCD_COLUMNS * LCD_ROWS] = '\0'; // Null-terminate the string
+
+    // Initialize the current column and row positions
+    currentCol = 0;
+    currentRow = 0;
+
+    if (Usb.Init() == -1)
+        Serial.println("OSC did not start.");
+
+    delay(10);
+
+    HidKeyboard.SetReportParser(0, &Prs);
+}
+
+void loop()
+{
+    Usb.Task();
+
+    // Look for new cards
+  if (!mfrc522.PICC_IsNewCardPresent()) {
+    return;
+  }
+
+  // Select one of the cards
+  if (!mfrc522.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  // Get the card ID
+  String cardID = "";
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    cardID += String(mfrc522.uid.uidByte[i], HEX);
+  }
+  cardID.toUpperCase();
+
+  // Authenticate with a key (usually key A or key B)
+  MFRC522::MIFARE_Key key;
+  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF; // default key for authentication
+
+  byte blockAddr = 4; // Block address to write to (block 4 is just an example)
+  byte buffer[18];
+  byte bufferSize = sizeof(buffer);
+
+  // Try to authenticate
+  MFRC522::StatusCode status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, blockAddr, &key, &(mfrc522.uid));
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print("Authentication failed: ");
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+
+  // Reading the block before updating it
+  status = mfrc522.MIFARE_Read(blockAddr, buffer, &bufferSize);
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print("Reading failed: ");
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+
+  // Display the current saldo
+  long saldo = 0;
+  for (int i = 0; i < 4; i++) {
+    saldo |= ((long)buffer[i] << (i * 8));
+  }
+  Serial.print("Card ID: ");
+  Serial.print(cardID);
+  Serial.print(", Current saldo: ");
+  Serial.println(saldo);
+
+  // Display Card ID and Saldo on LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ID: ");
+  lcd.print(cardID);
+  lcd.setCursor(0, 1);
+  lcd.print("Saldo: ");
+  lcd.print("Rp. ");
+  lcd.print(saldo);
+  
+
+  // Halt PICC
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+
+  delay(10); // Delay before the next scan
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Scan your RFID");
+  lcd.setCursor(0, 1);
+  lcd.print("card...");
+
+}
